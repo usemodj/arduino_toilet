@@ -49,6 +49,7 @@ int SENSOR_SIGN[9] = {1,1,1,-1,-1,-1,1,1,1}; //Correct directions x,y,z - gyro, 
 
 #include <Wire.h>
 #include <DistanceGP2Y0A21YK.h>
+#include <Servo.h>
 
 // LSM303 accelerometer: 8 g sensitivity
 // 3.9 mg/digit; 1 g = 256
@@ -92,9 +93,13 @@ int SENSOR_SIGN[9] = {1,1,1,-1,-1,-1,1,1,1}; //Correct directions x,y,z - gyro, 
 #define STATUS_LED 13 
 #define UV_LED 12
 #define UV_LED_TIME 60000  //5 minute(5*60*1000 msec)
-#define OFF_DEG 5  //LED OFF Pitch Degree
+#define OFF_DEG 7  //LED OFF Pitch(y) Degree
 #define OFF_DIST 30  //LED Off distance cm
 #define DIST_INPUT A0 //distance input pin A0
+#define SERVO  9 //Servo pin 9
+#define SERVO_OPEN 100  //Servo open degree
+#define CLOSE_COUNT 500 // Distance sensor close counter
+#define OPEN_COUNT 50  // Distance sensor open counter
 
 float G_Dt=0.02;    // Integration time (DCM algorithm)  We will run the integration loop at 50Hz if possible
 
@@ -103,9 +108,13 @@ long timer_old;
 long timer24=0; //Second timer used to print values 
 long led_timer=0; //uv led timer
 boolean led_active = true;
+boolean servo_open = false;
+int close_counter = 0;
+int open_counter = 0;
 
 DistanceGP2Y0A21YK Dist;
 int distance;
+Servo myservo; //create servo object to control a servo
 
 int AN[6]; //array that stores the gyro and accelerometer data
 int AN_OFFSET[6]={0,0,0,0,0,0}; //Array that stores the Offset of the sensors
@@ -170,9 +179,16 @@ void setup()
   
   digitalWrite(UV_LED,LOW);
   Dist.begin(DIST_INPUT);
+  myservo.attach(SERVO); //Attaches the servo on pin 9 to the servo object
+  myservo.write(0); // servo close
+  delay(20);
+  servo_open = false;
+  close_counter = 0;
+  led_active = true;
+  servo_open = false;
   
   I2C_Init();
-  Serial.println("Pololu MinIMU-9 + Arduino AHRS");
+  Serial.println("NodeSoft Toilet");
 
   digitalWrite(STATUS_LED,LOW);
   delay(1500);
@@ -246,13 +262,27 @@ void loop() //Main Loop
     distance = Dist.getDistanceCentimeter();
     Serial.print("Distance in centimers: ");
     Serial.println(distance);  
-    if(distance < OFF_DIST){
+    if(!servo_open && distance < OFF_DIST){
       digitalWrite(UV_LED, LOW);
-      //led_active = false;
-    } 
-    else if(abs(ToDeg(pitch)) < OFF_DEG){ //y-axis tilt
+      close_counter = 0;
+      open_counter++;
+      if(open_counter > OPEN_COUNT){
+        open_counter = 0;
+        openToilet();
+      }
       
-      if(led_active && digitalRead(UV_LED) == LOW){
+    } else if(servo_open && distance > OFF_DIST + 20){
+      open_counter = 0;
+      close_counter++;
+      if(close_counter > CLOSE_COUNT) {
+        close_counter = 0;
+        closeToilet();  
+      }     
+    } 
+    
+    if(abs(ToDeg(pitch)) < OFF_DEG){ //y-axis tilt
+      
+      if(!servo_open && led_active && digitalRead(UV_LED) == LOW){
         digitalWrite(UV_LED, HIGH);
         led_timer = millis();
       }
@@ -268,4 +298,28 @@ void loop() //Main Loop
     
   }
    
+}
+
+void openToilet(){
+  myservo.write(SERVO_OPEN/4);
+  delay(100);
+  myservo.write(SERVO_OPEN/2);
+  delay(100);
+  myservo.write(SERVO_OPEN*3/4);
+  delay(100);
+  myservo.write(SERVO_OPEN); //Servo open
+  delay(100);
+  servo_open = true;
+}
+
+void closeToilet(){
+  myservo.write(SERVO_OPEN*3/4);
+  delay(100);
+  myservo.write(SERVO_OPEN/2);
+  delay(100);
+  myservo.write(SERVO_OPEN/4);
+  delay(100);
+  myservo.write(0); //Servo close
+  delay(100);
+  servo_open = false;  
 }
