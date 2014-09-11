@@ -49,7 +49,7 @@ int SENSOR_SIGN[9] = {1,1,1,-1,-1,-1,1,1,1}; //Correct directions x,y,z - gyro, 
 
 #include <Wire.h>
 #include <DistanceGP2Y0A21YK.h>
-#include <Servo.h>
+//#include <Servo.h>
 
 // LSM303 accelerometer: 8 g sensitivity
 // 3.9 mg/digit; 1 g = 256
@@ -93,13 +93,18 @@ int SENSOR_SIGN[9] = {1,1,1,-1,-1,-1,1,1,1}; //Correct directions x,y,z - gyro, 
 #define STATUS_LED 13 
 #define UV_LED 6 //UV LED pin 6
 #define UV_LED_TIME 60000  //1 minute(1*60*1000 msec)
-#define OFF_DEG 7  //LED OFF Pitch(y) Degree
+#define CLOSE_DEG 7  //LED OFF AXIS Degree
 #define OFF_DIST 30  //LED Off distance cm
 #define DIST_INPUT A0 //distance input pin A0
-#define SERVO  7 //Servo pin 7
-#define SERVO_OPEN 100  //Servo open degree
-#define CLOSE_COUNT 200 // Distance sensor close counter
-#define OPEN_COUNT 50  // Distance sensor open counter
+//#define SERVO  7 //Servo pin 7
+#define OPEN_DEG 73  //Servo open degree
+#define CLOSE_COUNT 100 // Distance sensor close counter
+#define OPEN_COUNT 2  // Distance sensor open counter
+#define MOTOR_EN  3  //DC Motor Enable pin
+#define MOTOR_1A 4  //DC Motor 1A pin
+#define MOTOR_2A 5  //DC Motor 2A pin
+#define MOTOR_SPEED  255 //DC Motor speed value
+#define AXIS   roll   //roll:x-axis, pitch:y-axis, yaw:z-axis
 
 float G_Dt=0.02;    // Integration time (DCM algorithm)  We will run the integration loop at 50Hz if possible
 
@@ -114,7 +119,7 @@ int open_counter = 0;
 
 DistanceGP2Y0A21YK Dist;
 int distance;
-Servo myservo; //create servo object to control a servo
+//Servo myservo; //create servo object to control a servo
 
 int AN[6]; //array that stores the gyro and accelerometer data
 int AN_OFFSET[6]={0,0,0,0,0,0}; //Array that stores the Offset of the sensors
@@ -174,25 +179,27 @@ float Temporary_Matrix[3][3]={
 void setup()
 { 
   Serial.begin(115200);
-  pinMode (STATUS_LED,OUTPUT);  // Status LED
-  pinMode (UV_LED,OUTPUT);  // UV LED
+  pinMode(STATUS_LED,OUTPUT);  // Status LED
+  pinMode(UV_LED,OUTPUT);  // UV LED
+  pinMode(MOTOR_EN, OUTPUT); //dc motor enable(speed)
+  pinMode(MOTOR_1A, OUTPUT); //dc motor 1A pin
+  pinMode(MOTOR_2A, OUTPUT); //dc motor 2A pin
   
   digitalWrite(UV_LED,LOW);
   Dist.begin(DIST_INPUT);
-  myservo.attach(SERVO); //Attaches the servo on pin 9 to the servo object
-  myservo.write(0); // servo close
-  delay(20);
-  servo_open = false;
+  //myservo.attach(SERVO); //Attaches the servo on pin 9 to the servo object
+  //myservo.write(0); // servo close
+  //closeToilet();
+  //delay(20);
+
   close_counter = 0;
   led_active = true;
   servo_open = false;
   
   I2C_Init();
-  Serial.println("NodeSoft Toilet");
+  Serial.println("NodeSoft UV Toilet DC");
 
-  digitalWrite(STATUS_LED,LOW);
   delay(1500);
- 
   Accel_Init();
   Compass_Init();
   Gyro_Init();
@@ -200,13 +207,14 @@ void setup()
   delay(20);
   
   for(int i=0;i<32;i++)    // We take some readings...
-    {
+  {
     Read_Gyro();
     Read_Accel();
     for(int y=0; y<6; y++)   // Cumulate values
       AN_OFFSET[y] += AN[y];
+          
     delay(20);
-    }
+  }
     
   for(int y=0; y<6; y++)
     AN_OFFSET[y] = AN_OFFSET[y]/32;
@@ -214,22 +222,33 @@ void setup()
   AN_OFFSET[5]-=GRAVITY*SENSOR_SIGN[5];
   
   //Serial.println("Offset:");
-  for(int y=0; y<6; y++)
+  for(int y=0; y<6; y++){
+    Serial.print(">>AN_OFFSET["); 
+    Serial.print(y); Serial.print("]: ");
     Serial.println(AN_OFFSET[y]);
-  
-  delay(2000);
-  digitalWrite(STATUS_LED,HIGH);
+  }
+  //Array that stores the Offset of the sensors
+  AN_OFFSET[0] = -41;
+  AN_OFFSET[1] = 67;
+  AN_OFFSET[2] = -29;
+  AN_OFFSET[3] = -24;
+  AN_OFFSET[4] = 13;
+  AN_OFFSET[5] = 16; 
+  //delay(2000);
     
   led_timer = millis();
   timer=millis();
   delay(20);
   counter=0;
+  
 }
 
 void loop() //Main Loop
 {
   if((millis()-timer)>=20)  // Main loop runs at 50Hz
   {
+    digitalWrite(STATUS_LED,HIGH);
+
     counter++;
     timer_old = timer;
     timer=millis();
@@ -241,8 +260,9 @@ void loop() //Main Loop
     // *** DCM algorithm
     // Data adquisition
     Read_Gyro();   // This read gyro data
+    delay(20);
     Read_Accel();     // Read I2C accelerometer
-    
+    delay(20);
     if (counter > 5)  // Read compass data at 10Hz... (5 loop runs)
       {
       counter=0;
@@ -256,13 +276,14 @@ void loop() //Main Loop
     Drift_correction();
     Euler_angles();
     // ***
-   
+    
     printdata();
     Serial.println(digitalRead(UV_LED));
     distance = Dist.getDistanceCentimeter();
+    delay(20); 
     Serial.print("Distance in centimers: ");
-    Serial.println(distance);  
-    if(!servo_open && distance < OFF_DIST){
+    Serial.println(distance); 
+    if(distance < OFF_DIST){
       digitalWrite(UV_LED, LOW);
       close_counter = 0;
       open_counter++;
@@ -270,17 +291,20 @@ void loop() //Main Loop
         open_counter = 0;
         openToilet();
       }
-      
-    } else if(servo_open && distance > OFF_DIST + 20){
+        
+    } else {
+      if(abs(ToDeg(AXIS)) > OPEN_DEG){
+        openToilet(); //motor disabled
+      }
       open_counter = 0;
       close_counter++;
-      if(close_counter > CLOSE_COUNT) {
-        close_counter = 0;
+      if(abs(ToDeg(AXIS)) < CLOSE_DEG || close_counter > CLOSE_COUNT) {
+        //close_counter = 0;
         closeToilet();  
       }     
     } 
     
-    if(abs(ToDeg(pitch)) < OFF_DEG){ //y-axis tilt
+    if(abs(ToDeg(AXIS)) < CLOSE_DEG){ //y-axis tilt
       
       if(!servo_open && led_active && digitalRead(UV_LED) == LOW){
         digitalWrite(UV_LED, HIGH);
@@ -296,30 +320,39 @@ void loop() //Main Loop
       led_active = true;
     }
     
-  }
+    digitalWrite(STATUS_LED,LOW);
+
+  } //end of // Main loop runs at 50Hz
    
 }
 
 void openToilet(){
-  myservo.write(SERVO_OPEN/4);
-  delay(100);
-  myservo.write(SERVO_OPEN/2);
-  delay(100);
-  myservo.write(SERVO_OPEN*3/4);
-  delay(100);
-  myservo.write(SERVO_OPEN); //Servo open
-  delay(100);
-  servo_open = true;
+  if(abs(ToDeg(AXIS))< OPEN_DEG){
+    Serial.println("...openToilet...");
+    analogWrite(MOTOR_EN, MOTOR_SPEED); //output speed as PWM value
+    //Turn left
+    digitalWrite(MOTOR_1A, HIGH);
+    digitalWrite(MOTOR_2A, LOW);
+    
+  } else {
+    analogWrite(MOTOR_EN, LOW);
+    servo_open = true;
+  }
+  delay(20);
 }
 
 void closeToilet(){
-  myservo.write(SERVO_OPEN*3/4);
-  delay(100);
-  myservo.write(SERVO_OPEN/2);
-  delay(100);
-  myservo.write(SERVO_OPEN/4);
-  delay(100);
-  myservo.write(0); //Servo close
-  delay(100);
-  servo_open = false;  
+  if(abs(ToDeg(AXIS)) > CLOSE_DEG){
+    Serial.println("...closeToilet...");
+    analogWrite(MOTOR_EN, MOTOR_SPEED); //output speed as PWM value
+    //Turn right
+    digitalWrite(MOTOR_1A, LOW);
+    digitalWrite(MOTOR_2A, HIGH);
+    
+  } else {
+    analogWrite(MOTOR_EN, LOW);
+    close_counter = 0;
+    servo_open = false;
+  }
+  delay(20); 
 }
